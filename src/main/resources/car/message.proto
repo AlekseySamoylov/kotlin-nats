@@ -1,0 +1,18 @@
+syntax = "proto3";
+package car;
+
+message Order {
+string id = 1;
+int32 amount = 2;
+string subject = 3;
+}
+
+message OrderAccepted {
+    string orderId = 1;
+}
+
+message Delivery {
+    string orderId = 1;
+    string model = 2;
+    string details = 3;
+}

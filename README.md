@@ -1,0 +1,2 @@
+- Install protobuf: http://google.github.io/proto-lens/installing-protoc.html
+- Generate protobuf Java classes: ```protoc --java_out=./src/main/java ./src/main/resources/car/message.proto```

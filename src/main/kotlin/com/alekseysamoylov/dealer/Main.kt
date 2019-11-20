@@ -2,9 +2,11 @@ package com.alekseysamoylov.dealer
 
 
 import car.Message
+import io.nats.client.Connection
 import io.nats.client.Dispatcher
 import io.nats.client.Nats
 import org.slf4j.LoggerFactory
+import java.time.LocalDateTime
 import java.util.*
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.CyclicBarrier
@@ -15,63 +17,25 @@ import java.util.concurrent.locks.ReentrantReadWriteLock
 private const val orderSubject = "order.jvm.service"
 private const val deliverySubject = "delivery.jvm.service"
 private const val carAmount = 500_000
-//private var cyclicBarrier = CyclicBarrier(0)
-private val lock = ReentrantReadWriteLock()
-private val readLock: ReentrantReadWriteLock.ReadLock = lock.readLock()
-private val writeLock: ReentrantReadWriteLock.WriteLock = lock.writeLock()
 private val logger = LoggerFactory.getLogger("JvmMain")
-private val objLock = Object()
 
+var deliveryTimeout = LocalDateTime.now().plusSeconds(5)
+var deliverySum = AtomicInteger(0)
+lateinit var connection: Connection
+lateinit var dispatcher: Dispatcher
 fun main() {
     logger.info("JVM Dialer started")
-//    TimeUnit.SECONDS.sleep(5)
+    TimeUnit.SECONDS.sleep(5)
 
-    val connection = Nats.connect()
-    var dispatcher: Dispatcher? = null
+    connection = Nats.connect()
     try {
-        val deliveryCounter = AtomicInteger(0)
-        dispatcher = connection.createDispatcher() {
-            val carDelivery = Message.Delivery.parseFrom(it.data)
-            if (carDelivery.model == "Ford Mustang Shelby GT350") {
-//                synchronized(objLock) {
-                    deliveryCounter.incrementAndGet()
-                    objLock.notify()
-//                }
-//                cyclicBarrier.await()
-            }
-        }
-        dispatcher.subscribe(deliverySubject)
+        subscribeToCarDelivery()
+        var carAmountCorrection = 0
         while (true) {
-//            if (cyclicBarrier.await(5, TimeUnit.SECONDS) > 0) {
-//                logger.info("Timed out waiting for car delivery")
-//            }
-//            writeLock.tryLock(10, TimeUnit.SECONDS)
-//            cyclicBarrier.reset()
+            approveOrder(carAmountCorrection)
+            carAmountCorrection = checkDelivery()
 
-//            TimeUnit.SECONDS.sleep(5)
-            val order = Message.Order.newBuilder()
-                .setId(UUID.randomUUID().toString())
-                .setAmount(carAmount)
-                .setSubject(deliverySubject)
-                .build()
-            val future = connection.request(orderSubject, order.toByteArray())
-            try {
-                val message = future.get(500, TimeUnit.MILLISECONDS)
-                val orderAccepted = Message.OrderAccepted.parseFrom(message.data)
-                if (orderAccepted.orderId == order.id) {
-                    logger.info("JVM Order accepted")
-                }
-            } catch (ex: Exception) {
-                logger.info("Cannot get order accept")
-            }
-
-            while (deliveryCounter.get() % carAmount != 0) {
-                synchronized(objLock) {
-                    objLock.wait(5000)
-                }
-            }
-
-            logger.info("JVM Number of delivered Mustang Shelby GT350: ${deliveryCounter.get()}")
+            logger.info("JVM Number of delivered LADA VAZ 2105: ${deliverySum.get()}")
         }
     } finally {
         connection.closeDispatcher(dispatcher)
@@ -79,6 +43,50 @@ fun main() {
     }
 }
 
-//fun getCurrentCountDownLatch(): CountDownLatch {
-//    return cyclicBarrier
-//}
+fun checkDelivery(): Int {
+    var previousDeliveryCarAmount = 0
+    while (true) {
+        if ((LocalDateTime.now().isAfter(deliveryTimeout) || deliverySum.get() % carAmount == 0) && previousDeliveryCarAmount == deliverySum.get()) {
+            break
+        }
+        previousDeliveryCarAmount = deliverySum.get()
+        TimeUnit.MILLISECONDS.sleep(500)
+    }
+
+    deliveryTimeout = LocalDateTime.now().plusSeconds(5)
+    val deliveredForOrderOrZero = deliverySum.get() % carAmount
+    return if (deliveredForOrderOrZero == 0) {
+        0
+    } else {
+        carAmount - deliveredForOrderOrZero
+    }
+}
+
+
+fun subscribeToCarDelivery() {
+        dispatcher = connection.createDispatcher() {
+            val carDelivery = Message.Delivery.parseFrom(it.data)
+            if (carDelivery.model == "LADA VAZ 2105") {
+                deliverySum.incrementAndGet()
+            }
+        }
+        dispatcher.subscribe(deliverySubject)
+}
+
+fun approveOrder(carAmountCorrection: Int) {
+    val order = Message.Order.newBuilder()
+        .setId(UUID.randomUUID().toString())
+        .setAmount(carAmount + carAmountCorrection)
+        .setSubject(deliverySubject)
+        .build()
+    val future = connection.request(orderSubject, order.toByteArray())
+    try {
+        val message = future.get(500, TimeUnit.MILLISECONDS)
+        val orderAccepted = Message.OrderAccepted.parseFrom(message.data)
+        if (orderAccepted.orderId == order.id) {
+            logger.info("JVM Order accepted")
+        }
+    } catch (ex: Exception) {
+        logger.info("Cannot get order accept")
+    }
+}
